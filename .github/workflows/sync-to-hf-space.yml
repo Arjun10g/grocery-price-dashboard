@@ -1,0 +1,50 @@
+# Mirror main → Hugging Face Space on every push.
+#
+# Setup (one-time):
+#   gh secret set HF_TOKEN --repo Arjun10g/grocery-price-dashboard --body "<your hf token>"
+# OR via UI: Settings → Secrets and variables → Actions → New repository secret
+#
+# The token must have write access to the target Space. The Space's
+# build pipeline picks up the new commit automatically.
+
+name: sync to hf space
+
+on:
+  push:
+    branches: [main]
+  # Manual trigger from the Actions tab.
+  workflow_dispatch:
+
+# Avoid two pushes racing if commits land back-to-back.
+concurrency:
+  group: hf-space-sync
+  cancel-in-progress: false
+
+jobs:
+  push:
+    runs-on: ubuntu-latest
+    steps:
+      - name: checkout (full history)
+        uses: actions/checkout@v4
+        with:
+          # HF Space main may have its own seed commit from Space
+          # creation. Full history lets git push --force resolve
+          # cleanly the first run; subsequent runs are fast-forward.
+          fetch-depth: 0
+          lfs: true
+
+      - name: push to hf space
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+          HF_USER: arjun10g
+          HF_SPACE: grocery-prices
+        run: |
+          if [ -z "$HF_TOKEN" ]; then
+            echo "::error::HF_TOKEN secret is not set on this repo."
+            echo "Add it via Settings → Secrets and variables → Actions."
+            exit 1
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git push --force "https://${HF_USER}:${HF_TOKEN}@huggingface.co/spaces/${HF_USER}/${HF_SPACE}" \
+            "HEAD:refs/heads/main"
