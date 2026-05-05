@@ -36,10 +36,9 @@ async function fetchOverviewStats() {
           new Date(Date.now() - 7 * 24 * 3600 * 1000).toISOString(),
         ),
       // Active = any source with a successful run in the last 30
-      // days. Counts osm_overpass (which writes stores not
-      // observations) and gives flyer_vlm credit on its first
-      // successful production run, both of which the
-      // observations-only count would miss.
+      // days. Gives flyer_vlm credit on its first successful
+      // production run, which the observations-only count would
+      // miss until cards land.
       supabase
         .from("pipeline_runs")
         .select("source_id")
@@ -52,6 +51,12 @@ async function fetchOverviewStats() {
   const activeSourceIds = new Set(
     (recentRuns.data ?? []).map((r) => (r as { source_id: string }).source_id),
   );
+  // osm_overpass deliberately does NOT use jobs.run_source (it
+  // has its own runner because it writes stores not
+  // price_observations). Include it as active iff the stores
+  // table has any rows — that's the only signal of a successful
+  // osm run we have without the pipeline_runs entry.
+  if ((stores.count ?? 0) > 0) activeSourceIds.add("osm_overpass");
   return {
     observations: obs.count ?? 0,
     products: products.count ?? 0,
