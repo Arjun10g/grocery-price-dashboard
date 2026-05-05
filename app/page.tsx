@@ -17,29 +17,49 @@ const SOURCES = [
 ] as const;
 
 async function fetchOverviewStats() {
-  const [obs, products, stores, sources, runs, dlq] = await Promise.all([
-    supabase
-      .from("price_observations")
-      .select("*", { count: "exact", head: true }),
-    supabase.from("products").select("*", { count: "exact", head: true }),
-    supabase.from("stores").select("*", { count: "exact", head: true }),
-    supabase.from("sources").select("*", { count: "exact", head: true }),
-    supabase.from("pipeline_runs").select("*", { count: "exact", head: true }),
-    supabase
-      .from("price_observations")
-      .select("*", { count: "exact", head: true })
-      .gte(
-        "observed_at",
-        new Date(Date.now() - 7 * 24 * 3600 * 1000).toISOString(),
-      ),
-  ]);
+  const [obs, products, stores, sources, runs, last7d, recentRuns] =
+    await Promise.all([
+      supabase
+        .from("price_observations")
+        .select("*", { count: "exact", head: true }),
+      supabase.from("products").select("*", { count: "exact", head: true }),
+      supabase.from("stores").select("*", { count: "exact", head: true }),
+      supabase.from("sources").select("*", { count: "exact", head: true }),
+      supabase
+        .from("pipeline_runs")
+        .select("*", { count: "exact", head: true }),
+      supabase
+        .from("price_observations")
+        .select("*", { count: "exact", head: true })
+        .gte(
+          "observed_at",
+          new Date(Date.now() - 7 * 24 * 3600 * 1000).toISOString(),
+        ),
+      // Active = any source with a successful run in the last 30
+      // days. Counts osm_overpass (which writes stores not
+      // observations) and gives flyer_vlm credit on its first
+      // successful production run, both of which the
+      // observations-only count would miss.
+      supabase
+        .from("pipeline_runs")
+        .select("source_id")
+        .eq("status", "succeeded")
+        .gte(
+          "started_at",
+          new Date(Date.now() - 30 * 24 * 3600 * 1000).toISOString(),
+        ),
+    ]);
+  const activeSourceIds = new Set(
+    (recentRuns.data ?? []).map((r) => (r as { source_id: string }).source_id),
+  );
   return {
     observations: obs.count ?? 0,
     products: products.count ?? 0,
     stores: stores.count ?? 0,
     sources: sources.count ?? 0,
     runs: runs.count ?? 0,
-    last7d: dlq.count ?? 0,
+    last7d: last7d.count ?? 0,
+    activeSources: activeSourceIds.size,
   };
 }
 
@@ -122,7 +142,12 @@ export default async function HomePage() {
     fetchTopRetailers(),
   ]);
 
-  const activeSources = perSource.filter((s) => s.count > 0).length;
+  // Two different "active" counts. activeSources (from pipeline_runs)
+  // tells you how many source modules ran successfully recently —
+  // the right number for "is the pipeline healthy". observationSources
+  // tells you how many source_ids show up in price_observations
+  // (excludes osm_overpass which only populates stores).
+  const observationSources = perSource.filter((s) => s.count > 0).length;
   const totalObs = perSource.reduce((acc, s) => acc + s.count, 0);
 
   return (
@@ -131,7 +156,7 @@ export default async function HomePage() {
         <div className="space-y-3">
           <div className="inline-flex items-center gap-2 text-xs uppercase tracking-widest text-emerald-400">
             <span className="size-1.5 rounded-full bg-emerald-400 animate-pulse" />
-            live · {activeSources} of 9 sources active
+            live · {stats.activeSources} of 9 sources running
           </div>
           <h1 className="text-4xl sm:text-5xl font-semibold tracking-tight">
             Canadian grocery prices, live.
@@ -156,7 +181,7 @@ export default async function HomePage() {
         />
         <Stat label="products" value={stats.products.toLocaleString()} />
         <Stat label="stores" value={stats.stores.toLocaleString()} />
-        <Stat label="sources" value={`${activeSources} / 9`} />
+        <Stat label="sources" value={`${stats.activeSources} / 9`} />
         <Stat label="pipeline runs" value={stats.runs.toLocaleString()} />
         <Stat label="obs · last 7d" value={stats.last7d.toLocaleString()} />
       </section>
@@ -168,7 +193,7 @@ export default async function HomePage() {
               Observations by source
             </h2>
             <span className="text-xs text-neutral-500">
-              {totalObs.toLocaleString()} total
+              {observationSources} contributing · {totalObs.toLocaleString()} total
             </span>
           </div>
           <ul className="space-y-2.5">
